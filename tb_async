@@ -1,0 +1,105 @@
+`timescale 1ns / 1ps
+
+module tb_async_fifo;
+
+    // Testbench Variables
+    reg wclk;
+    reg wrst_n;
+    reg wen;
+    reg [7:0] wdata;
+    
+    reg rclk;
+    reg rrst_n;
+    reg ren;
+
+    wire wfull;
+    wire [7:0] rdata;
+    wire rempty;
+
+    async_fifo #(
+        .DATA_WIDTH(8),
+        .ADDR_WIDTH(4) // Depth = 16
+    ) uut (
+        .wclk(wclk), 
+        .wrst_n(wrst_n), 
+        .wen(wen), 
+        .wdata(wdata), 
+        .wfull(wfull), 
+        
+        .rclk(rclk), 
+        .rrst_n(rrst_n), 
+        .ren(ren), 
+        .rdata(rdata), 
+        .rempty(rempty)
+    );
+
+    //Clock
+    initial begin
+        wclk = 0;
+        forever #5 wclk = ~wclk;   // 100MHz Write Clock
+    end
+    
+    initial begin
+        rclk = 0;
+        forever #13 rclk = ~rclk;  // ~38.4MHz Read Clock
+    end
+
+    integer i;
+    initial begin
+        
+        wrst_n = 0;
+        wen = 0;
+        wdata = 0;
+        rrst_n = 0;
+        ren = 0;
+
+        #20;
+        wrst_n = 1;
+        rrst_n = 1;
+        #20;
+
+
+        $display("[%0t] --- Starting Write Phase ---", $time);
+       
+        for (i = 0; i < 18; i = i + 1) begin
+            @(posedge wclk);
+            if (!wfull) begin
+                wen = 1;
+                wdata = i * 10; // Write 0, 10, 20, etc.
+                $display("[%0t] Written Data: %d", $time, wdata);
+            end else begin
+                wen = 0;
+                $display("[%0t] FIFO FULL Triggered! Cannot write %d", $time, i*10);
+            end
+        end
+        wen = 0;
+
+        
+        #100; 
+
+        $display("[%0t] --- Starting Read Phase ---", $time);
+        
+        for (i = 0; i < 18; i = i + 1) begin
+            @(posedge rclk);
+            if (!rempty) begin
+                ren = 1;
+            end else begin
+                ren = 0;
+                $display("[%0t] FIFO EMPTY Triggered!", $time);
+            end
+            
+            
+            if (ren) begin
+                @(posedge rclk); // Wait for rdata to update
+                $display("[%0t] Read Data from FIFO: %d", $time, rdata);
+                ren = 0; // Toggle to cleanly read one by one
+            end
+        end
+        ren = 0;
+        
+        #50;
+        $display("[%0t] --- Simulation Complete ---", $time);
+        $finish;
+    end
+      
+endmodule
