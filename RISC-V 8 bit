@@ -1,8 +1,5 @@
 `timescale 1ns / 1ps
 
-// 8-bit RISC-V Microprocessor
-// Simple single-cycle implementation
-// Includes Control Unit, ALU, Register File, and unified Memory layout.
 
 module riscv_8bit_cpu (
     input clk,
