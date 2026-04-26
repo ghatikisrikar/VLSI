@@ -1,0 +1,199 @@
+`timescale 1ns / 1ps
+
+// 8-bit RISC-V Microprocessor
+// Simple single-cycle implementation
+// Includes Control Unit, ALU, Register File, and unified Memory layout.
+
+module riscv_8bit_cpu (
+    input clk,
+    input rst
+);
+
+    wire [31:0] instr;
+    wire [7:0] alu_result;
+    wire [7:0] reg_read_data1, reg_read_data2;
+    wire [7:0] mem_read_data;
+    
+    wire reg_write, alu_src, mem_read, mem_write, branch, mem_to_reg;
+    wire [1:0] alu_op;
+    wire alu_zero;
+    
+    // Program Counter
+    reg [7:0] pc;
+    wire [7:0] pc_next;
+    
+    always @(posedge clk or posedge rst) begin
+        if (rst)
+            pc <= 0;
+        else
+            pc <= pc_next;
+    end
+    
+    //Instruction Memory
+    reg [31:0] instr_mem [0:255];
+    assign instr = instr_mem[pc >> 2]; 
+    
+
+    wire [6:0] opcode = instr[6:0];
+    wire [4:0] rd     = instr[11:7];
+    wire [2:0] funct3 = instr[14:12];
+    wire [4:0] rs1    = instr[19:15];
+    wire [4:0] rs2    = instr[24:20];
+    
+    //immediate generator
+    wire [7:0] imm = instr[31:24];
+
+    
+    //Control Unit
+
+    control_unit cu (
+        .opcode(opcode),
+        .branch(branch),
+        .mem_read(mem_read),
+        .mem_to_reg(mem_to_reg),
+        .alu_op(alu_op),
+        .mem_write(mem_write),
+        .alu_src(alu_src),
+        .reg_write(reg_write)
+    );
+    
+    //Register File
+    wire [7:0] write_data = mem_to_reg ? mem_read_data : alu_result;
+    register_file rf (
+        .clk(clk),
+        .rst(rst),
+        .reg_write(reg_write),
+        .rs1(rs1),
+        .rs2(rs2),
+        .rd(rd),
+        .write_data(write_data),
+        .read_data1(reg_read_data1),
+        .read_data2(reg_read_data2)
+    );
+    
+    //ALU
+
+    wire [7:0] alu_in2 = alu_src ? imm : reg_read_data2;
+    alu cpu_alu (
+        .alu_op(alu_op),
+        .in1(reg_read_data1),
+        .in2(alu_in2),
+        .funct3(funct3),
+        .result(alu_result),
+        .zero(alu_zero)
+    );
+    
+    //Data Memory
+
+    data_memory dmem (
+        .clk(clk),
+        .mem_write(mem_write),
+        .mem_read(mem_read),
+        .address(alu_result),
+        .write_data(reg_read_data2),
+        .read_data(mem_read_data)
+    );
+    
+    //PC Branch Logic
+    wire [7:0] pc_plus_4 = pc + 4;
+    wire [7:0] pc_branch = pc + imm;
+    assign pc_next = (branch && alu_zero) ? pc_branch : pc_plus_4;
+
+endmodule
+
+module control_unit (
+    input [6:0] opcode,
+    output reg branch, mem_read, mem_to_reg, mem_write, alu_src, reg_write,
+    output reg [1:0] alu_op
+);
+    
+    always @(*) begin
+        // Reset defaults
+        branch = 0; mem_read = 0; mem_to_reg = 0; 
+        mem_write = 0; alu_src = 0; reg_write = 0;
+        alu_op = 2'b00;
+        
+        case(opcode)
+            7'b0110011: begin // R-type format
+                reg_write = 1; alu_op = 2'b10;
+            end
+            7'b0010011: begin // I-type format (addi, etc)
+                reg_write = 1; alu_src = 1; alu_op = 2'b10;
+            end
+            7'b0000011: begin // Load format (lw)
+                reg_write = 1; alu_src = 1; mem_read = 1; mem_to_reg = 1;
+            end
+            7'b0100011: begin // Store format (sw)
+                alu_src = 1; mem_write = 1;
+            end
+            7'b1100011: begin // Branch format (beq)
+                branch = 1; alu_op = 2'b01;
+            end
+        endcase
+    end
+endmodule
+
+module register_file (
+    input clk, rst, reg_write,
+    input [4:0] rs1, rs2, rd,
+    input [7:0] write_data,
+    output [7:0] read_data1, read_data2
+);
+    reg [7:0] registers [0:31];
+    integer i;
+    
+    // Clear registers on startup
+    always @(posedge clk) begin
+        if (rst) begin
+            for(i = 0; i < 32; i = i + 1)
+                registers[i] <= 0;
+        end else if (reg_write && rd != 0) begin
+            // Register 0 is hardwired to zero in RISC-V
+            registers[rd] <= write_data;
+        end
+    end
+    
+    assign read_data1 = (rs1 == 0) ? 0 : registers[rs1];
+    assign read_data2 = (rs2 == 0) ? 0 : registers[rs2];
+endmodule
+
+module alu (
+    input [1:0] alu_op,
+    input [7:0] in1, in2,
+    input [2:0] funct3,
+    output reg [7:0] result,
+    output zero
+);
+    always @(*) begin
+        case(alu_op)
+            2'b00: result = in1 + in2; // memory offsets
+            2'b01: result = in1 - in2; // branch subtractions
+            2'b10: begin // math operations
+                case(funct3)
+                    3'b000: result = in1 + in2;   // ADD
+                    3'b111: result = in1 & in2;   // AND
+                    3'b110: result = in1 | in2;   // OR
+                    3'b010: result = (in1 < in2) ? 1 : 0; // SLT (Set on Less Than)
+                    default: result = 8'b0;
+                endcase
+            end
+            default: result = 8'b0;
+        endcase
+    end
+    assign zero = (result == 0);
+endmodule
+
+module data_memory (
+    input clk, mem_write, mem_read,
+    input [7:0] address, write_data,
+    output [7:0] read_data
+);
+    reg [7:0] memory [0:255]; // 256 bytes of basic RAM
+    
+    always @(posedge clk) begin
+        if (mem_write) 
+            memory[address] <= write_data;
+    end
+    
+    assign read_data = mem_read ? memory[address] : 8'b0;
+endmodule
